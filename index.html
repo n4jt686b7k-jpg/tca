@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>IoT Aquarium Dashboard</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/mqttws31.min.js"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
   <style>
     :root{
@@ -248,42 +248,44 @@ function deleteSched(time){
   addAlert('Хуваарь устгах хүсэлт илгээлээ: '+time,'warn');
 }
 
-// ========== MQTT ==========
+// ========== MQTT (MQTT.js) ==========
 function connectMQTT(){
-  try{
-    document.getElementById('connState').innerText='Холбогдож байна...';
+  document.getElementById('connState').innerText='Холбогдож байна...';
+  document.getElementById('connDot').className='conn-dot';
+
+  const url = 'wss://'+cfg.MQTT_BROKER+':'+cfg.MQTT_PORT+'/mqtt';
+  client = mqtt.connect(url, {
+    clientId:  cfg.CLIENT_ID,
+    username:  cfg.MQTT_USER,
+    password:  cfg.MQTT_PASS,
+    clean:     true,
+    reconnectPeriod: 5000
+  });
+
+  client.on('connect', ()=>{
+    connected=true;
+    document.getElementById('connState').innerText='Холбогдсон';
+    document.getElementById('connDot').className='conn-dot on';
+    addAlert('MQTT амжилттай холбогдлоо','ok');
+    [cfg.TOPICS.PH,cfg.TOPICS.TEMP,cfg.TOPICS.WATER,cfg.TOPICS.SCHED_STATE].forEach(t=>client.subscribe(t));
+    publish(cfg.TOPICS.SCHEDULE,'LIST');
+  });
+
+  client.on('message',(topic,payload)=>handleMessage(topic, payload.toString()));
+
+  client.on('disconnect',()=>{
+    connected=false;
+    document.getElementById('connState').innerText='Тасарсан';
     document.getElementById('connDot').className='conn-dot';
-    client=new Paho.MQTT.Client(cfg.MQTT_BROKER, Number(cfg.MQTT_PORT), '/mqtt', cfg.CLIENT_ID);
-    client.onConnectionLost=()=>{
-      connected=false;
-      document.getElementById('connState').innerText='Тасарсан';
-      document.getElementById('connDot').className='conn-dot';
-      addAlert('MQTT тасарсан — дахин холбоно...','warn');
-      setTimeout(connectMQTT,5000);
-    };
-    client.onMessageArrived=(msg)=>handleMessage(msg.destinationName, msg.payloadString);
-    client.connect({
-      useSSL:true,
-      userName:cfg.MQTT_USER,
-      password:cfg.MQTT_PASS,
-      onSuccess:()=>{
-        connected=true;
-        document.getElementById('connState').innerText='Холбогдсон';
-        document.getElementById('connDot').className='conn-dot on';
-        addAlert('MQTT амжилттай холбогдлоо','ok');
-        [cfg.TOPICS.PH,cfg.TOPICS.TEMP,cfg.TOPICS.WATER,cfg.TOPICS.SCHED_STATE].forEach(t=>client.subscribe(t));
-        // ESP32-с хуваарийн жагсаалт авах
-        publish(cfg.TOPICS.SCHEDULE,'LIST');
-      },
-      onFailure:(err)=>{
-        connected=false;
-        document.getElementById('connState').innerText='Алдаа';
-        document.getElementById('connDot').className='conn-dot';
-        addAlert('MQTT амжилтгүй: '+err.errorMessage,'danger');
-        setTimeout(connectMQTT,5000);
-      }
-    });
-  }catch(e){ addAlert('MQTT алдаа: '+e.message,'danger'); }
+    addAlert('MQTT тасарсан','warn');
+  });
+
+  client.on('error',(err)=>{
+    connected=false;
+    document.getElementById('connState').innerText='Алдаа';
+    document.getElementById('connDot').className='conn-dot';
+    addAlert('MQTT алдаа: '+err.message,'danger');
+  });
 }
 
 function handleMessage(topic,payload){
@@ -316,9 +318,7 @@ function handleMessage(topic,payload){
 
 function publish(topic,msg){
   if(!client||!connected){ addAlert('MQTT холбогдоогүй байна','danger'); return; }
-  const m=new Paho.MQTT.Message(String(msg));
-  m.destinationName=topic;
-  client.send(m);
+  client.publish(topic, String(msg));
 }
 
 // ========== Controls ==========
