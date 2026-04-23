@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IoT Aquarium Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/mqttws31.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+  <style>
+    :root{
+      --bg:#0f1724;--card:#0b1220;--accent:#0ea5a4;
+      --muted:#94a3b8;--ok:#16a34a;--warn:#f59e0b;--danger:#ef4444
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,sans-serif;color:#e6eef6;background:linear-gradient(180deg,#071022 0%,#081223 60%)}
+    .container{max-width:1100px;margin:24px auto;padding:20px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+    h1{font-size:20px;margin:0;color:var(--accent)}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+    .wide{grid-column:span 3}
+    .card{background:rgba(255,255,255,0.03);padding:14px;border-radius:12px;box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+    .widget-row{display:flex;gap:12px}
+    .widget{flex:1;padding:10px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent)}
+    .value{font-size:28px;font-weight:700}
+    .label{color:var(--muted);font-size:12px;margin-bottom:4px}
+    .controls{display:flex;flex-direction:column;gap:10px}
+    .control{display:flex;align-items:center;justify-content:space-between;padding:10px;border-radius:8px;background:rgba(255,255,255,0.01)}
+    .btn{padding:8px 14px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:500}
+    .btn-primary{background:var(--accent);color:#fff}
+    .btn-warn{background:var(--warn);color:#111}
+    .btn-danger{background:var(--danger);color:#fff}
+    .btn-muted{background:rgba(255,255,255,0.07);color:var(--muted);border:1px solid rgba(255,255,255,0.08)}
+    .small{font-size:12px;color:var(--muted)}
+    .topic{font-size:11px;color:var(--muted);margin-top:2px}
+    .charts{display:flex;gap:12px}
+    canvas{background:transparent;border-radius:8px}
+    .alerts{min-height:48px;max-height:200px;overflow-y:auto}
+    footer{margin-top:12px;color:var(--muted);font-size:13px}
+    /* Schedule table */
+    .sched-list{margin-top:10px}
+    .sched-item{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,0.03);margin-bottom:6px}
+    .sched-time{font-size:18px;font-weight:700;color:var(--accent)}
+    .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;background:rgba(14,165,164,0.15);color:var(--accent)}
+    /* Modal */
+    .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,0.7);z-index:100}
+    .modal.show{display:flex}
+    .modal .card{width:440px;max-width:95vw}
+    input,select{width:100%;padding:8px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);color:#e6eef6;font-size:14px}
+    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px;margin-top:10px}
+    .row{display:flex;gap:8px}
+    .col{flex:1}
+    .conn-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;background:var(--danger)}
+    .conn-dot.on{background:var(--ok)}
+    h3{margin-top:0;margin-bottom:12px}
+  </style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>🐟 Aquarium Dashboard</h1>
+    <div style="display:flex;gap:10px;align-items:center">
+      <span class="small"><span class="conn-dot" id="connDot"></span><span id="connState">Холбогдож байна...</span></span>
+      <button class="btn btn-muted" id="openSettings">⚙ Settings</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- Sensors -->
+    <div class="card widget-row wide">
+      <div class="widget">
+        <div class="label">pH</div>
+        <div class="value" id="phValue">--</div>
+        <div class="small">Realtime pH level</div>
+      </div>
+      <div class="widget">
+        <div class="label">Температур (°C)</div>
+        <div class="value" id="tempValue">--</div>
+        <div class="small">DS18B20</div>
+      </div>
+      <div class="widget">
+        <div class="label">Усны түвшин (cm)</div>
+        <div class="value" id="waterLevelValue">--</div>
+        <div class="small">Ultrasonic HC-SR04</div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card controls">
+      <div style="font-weight:600;margin-bottom:6px">Удирдлага</div>
+      <div class="control">
+        <div><div class="label">Ус гаргах</div><div class="topic">control/water_out</div></div>
+        <button class="btn btn-primary" id="waterOutBtn">Pump Out</button>
+      </div>
+      <div class="control">
+        <div><div class="label">Ус оруулах</div><div class="topic">control/water_in</div></div>
+        <button class="btn btn-primary" id="waterInBtn">Pump In</button>
+      </div>
+      <div class="control">
+        <div><div class="label">LED гэрэл</div><div class="topic">control/light</div></div>
+        <button class="btn btn-muted" id="lightToggle">Toggle</button>
+      </div>
+      <div class="control">
+        <div><div class="label">Загас тэжээгч</div><div class="topic">control/feeder</div></div>
+        <button class="btn btn-warn" id="feedNow">Feed Now</button>
+      </div>
+    </div>
+
+    <!-- Feed Scheduler -->
+    <div class="card wide">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <strong>⏰ Тэжээх хуваарь</strong>
+          <div class="small">ESP32 дээр хадгалагдана — WiFi тасарсан ч ажиллана</div>
+        </div>
+        <button class="btn btn-primary" id="openAddSched">+ Нэмэх</button>
+      </div>
+      <div class="sched-list" id="schedList">
+        <div class="small" style="padding:8px">ESP32-с хуваарь ачааллаж байна...</div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="card wide">
+      <div style="margin-bottom:8px"><strong>Графикууд</strong><div class="small">pH ба температур</div></div>
+      <div class="charts">
+        <canvas id="phChart" width="400" height="120"></canvas>
+        <canvas id="tempChart" width="400" height="120"></canvas>
+      </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="card wide">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Лог / Анхааруулга</strong>
+        <button class="btn btn-muted" id="clearAlerts">Clear</button>
+      </div>
+      <div class="alerts" id="alerts"></div>
+    </div>
+  </div>
+
+  <footer>Aquarium IoT — HiveMQ Cloud · huslen</footer>
+</div>
+
+<!-- Add Schedule Modal -->
+<div class="modal" id="schedModal">
+  <div class="card">
+    <h3>⏰ Хуваарь нэмэх</h3>
+    <label>Тэжээх цаг</label>
+    <input type="time" id="newSchedTime">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-primary" id="confirmAddSched">Нэмэх</button>
+      <button class="btn btn-muted" id="closeSchedModal">Болих</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal" id="settingsModal">
+  <div class="card">
+    <h3>⚙ Settings</h3>
+    <label>MQTT Broker (wss://)</label>
+    <input id="mqttBroker">
+    <div class="row">
+      <div class="col"><label>Port</label><input id="mqttPort"></div>
+      <div class="col"><label>Client ID</label><input id="mqttClientId"></div>
+    </div>
+    <label>Username</label><input id="mqttUser">
+    <label>Password</label><input id="mqttPass" type="password">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-primary" id="saveSettings">Save & Reconnect</button>
+      <button class="btn btn-muted" id="closeSettings">Болих</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========== CONFIG ==========
+const DEFAULTS = {
+  MQTT_BROKER: 'wss://10cd6204c71541cf9253bcc891e5f82a.s1.eu.hivemq.cloud',
+  MQTT_PORT:   8884,
+  CLIENT_ID:   'aqua-dash-' + Math.floor(Math.random()*10000),
+  MQTT_USER:   'huslen',
+  MQTT_PASS:   'husleek0922',
+  TOPICS: {
+    PH:         'sensors/ph',
+    TEMP:       'sensors/temperature',
+    WATER:      'sensors/water_level',
+    PUMP_OUT:   'control/water_out',
+    PUMP_IN:    'control/water_in',
+    LIGHT:      'control/light',
+    FEEDER:     'control/feeder',
+    SCHEDULE:   'control/schedule',
+    SCHED_STATE:'status/schedules'
+  }
+};
+
+function loadCfg(){ const s=JSON.parse(localStorage.getItem('aq_cfg')||'null'); return s?Object.assign({},DEFAULTS,s):JSON.parse(JSON.stringify(DEFAULTS)); }
+function saveCfg(c){ localStorage.setItem('aq_cfg',JSON.stringify(c)); }
+let cfg = loadCfg();
+
+let client=null, connected=false;
+let phHistory=[], tempHistory=[], timeLabels=[];
+let schedules=[];
+
+// ========== Charts ==========
+const phChart = new Chart(document.getElementById('phChart').getContext('2d'),{
+  type:'line',
+  data:{labels:timeLabels,datasets:[{label:'pH',data:phHistory,fill:false,tension:0.3,borderColor:'#0ea5a4',pointRadius:2}]},
+  options:{scales:{y:{min:0,max:14,ticks:{color:'#94a3b8'},grid:{color:'rgba(255,255,255,0.05)'}},x:{ticks:{color:'#94a3b8'},grid:{color:'rgba(255,255,255,0.05)'}}},plugins:{legend:{display:false}}}
+});
+const tempChart = new Chart(document.getElementById('tempChart').getContext('2d'),{
+  type:'line',
+  data:{labels:timeLabels,datasets:[{label:'Temp',data:tempHistory,fill:false,tension:0.3,borderColor:'#f59e0b',pointRadius:2}]},
+  options:{scales:{y:{min:0,max:50,ticks:{color:'#94a3b8'},grid:{color:'rgba(255,255,255,0.05)'}},x:{ticks:{color:'#94a3b8'},grid:{color:'rgba(255,255,255,0.05)'}}},plugins:{legend:{display:false}}}
+});
+
+function pushPoint(ph,temp){
+  const now=new Date();
+  const label=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  timeLabels.push(label); phHistory.push(ph); tempHistory.push(temp);
+  if(timeLabels.length>60){timeLabels.shift();phHistory.shift();tempHistory.shift();}
+  phChart.update(); tempChart.update();
+}
+
+// ========== Schedule UI ==========
+function renderSchedules(){
+  const div=document.getElementById('schedList');
+  if(schedules.length===0){
+    div.innerHTML='<div class="small" style="padding:8px;color:var(--muted)">Хуваарь байхгүй. "+ Нэмэх" дарж нэмнэ үү.</div>';
+    return;
+  }
+  div.innerHTML='';
+  schedules.forEach((t,i)=>{
+    const el=document.createElement('div');
+    el.className='sched-item';
+    el.innerHTML=`
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="sched-time">${t}</span>
+        <span class="badge">өдөр бүр</span>
+      </div>
+      <button class="btn btn-danger" style="padding:4px 10px;font-size:12px" onclick="deleteSched('${t}')">Устгах</button>`;
+    div.appendChild(el);
+  });
+}
+
+function deleteSched(time){
+  publish(cfg.TOPICS.SCHEDULE, 'DEL:'+time);
+  addAlert('Хуваарь устгах хүсэлт илгээлээ: '+time,'warn');
+}
+
+// ========== MQTT ==========
+function connectMQTT(){
+  try{
+    document.getElementById('connState').innerText='Холбогдож байна...';
+    document.getElementById('connDot').className='conn-dot';
+    client=new Paho.MQTT.Client(cfg.MQTT_BROKER, Number(cfg.MQTT_PORT), cfg.CLIENT_ID);
+    client.onConnectionLost=()=>{
+      connected=false;
+      document.getElementById('connState').innerText='Тасарсан';
+      document.getElementById('connDot').className='conn-dot';
+      addAlert('MQTT тасарсан — дахин холбоно...','warn');
+      setTimeout(connectMQTT,5000);
+    };
+    client.onMessageArrived=(msg)=>handleMessage(msg.destinationName, msg.payloadString);
+    client.connect({
+      useSSL:true,
+      userName:cfg.MQTT_USER,
+      password:cfg.MQTT_PASS,
+      onSuccess:()=>{
+        connected=true;
+        document.getElementById('connState').innerText='Холбогдсон';
+        document.getElementById('connDot').className='conn-dot on';
+        addAlert('MQTT амжилттай холбогдлоо','ok');
+        [cfg.TOPICS.PH,cfg.TOPICS.TEMP,cfg.TOPICS.WATER,cfg.TOPICS.SCHED_STATE].forEach(t=>client.subscribe(t));
+        // ESP32-с хуваарийн жагсаалт авах
+        publish(cfg.TOPICS.SCHEDULE,'LIST');
+      },
+      onFailure:(err)=>{
+        connected=false;
+        document.getElementById('connState').innerText='Алдаа';
+        document.getElementById('connDot').className='conn-dot';
+        addAlert('MQTT амжилтгүй: '+err.errorMessage,'danger');
+        setTimeout(connectMQTT,5000);
+      }
+    });
+  }catch(e){ addAlert('MQTT алдаа: '+e.message,'danger'); }
+}
+
+function handleMessage(topic,payload){
+  if(topic===cfg.TOPICS.PH){
+    const v=parseFloat(payload);
+    document.getElementById('phValue').innerText=isNaN(v)?payload:v.toFixed(2);
+    const t=parseFloat(document.getElementById('tempValue').innerText)||null;
+    pushPoint(isNaN(v)?null:v,t);
+    if(!isNaN(v)&&(v<6.0||v>8.5)) addAlert('pH хэмжээнээс гарсан: '+v.toFixed(2),'danger');
+  }
+  else if(topic===cfg.TOPICS.TEMP){
+    const t=parseFloat(payload);
+    document.getElementById('tempValue').innerText=isNaN(t)?payload:t.toFixed(1);
+    const p=parseFloat(document.getElementById('phValue').innerText)||null;
+    pushPoint(p,isNaN(t)?null:t);
+    if(!isNaN(t)&&(t<20||t>32)) addAlert('Температур хэмжээнээс гарсан: '+t.toFixed(1)+'°C','warn');
+  }
+  else if(topic===cfg.TOPICS.WATER){
+    document.getElementById('waterLevelValue').innerText=payload;
+    if(parseInt(payload)<5) addAlert('Усны түвшин маш бага: '+payload+' cm','danger');
+  }
+  else if(topic===cfg.TOPICS.SCHED_STATE){
+    // "08:00,12:00,18:00" эсвэл "EMPTY"
+    if(payload==='EMPTY'){ schedules=[]; }
+    else{ schedules=payload.split(',').map(s=>s.trim()).filter(s=>s.length===5); }
+    renderSchedules();
+    addAlert('Хуваарь шинэчлэгдлээ: '+(schedules.length===0?'хоосон':schedules.join(', ')),'ok');
+  }
+}
+
+function publish(topic,msg){
+  if(!client||!connected){ addAlert('MQTT холбогдоогүй байна','danger'); return; }
+  const m=new Paho.MQTT.Message(String(msg));
+  m.destinationName=topic;
+  client.send(m);
+}
+
+// ========== Controls ==========
+document.getElementById('waterOutBtn').onclick=()=>{ publish(cfg.TOPICS.PUMP_OUT,'START'); addAlert('Ус гаргах команд илгээлээ','ok'); };
+document.getElementById('waterInBtn').onclick=()=>{ publish(cfg.TOPICS.PUMP_IN,'START'); addAlert('Ус оруулах команд илгээлээ','ok'); };
+document.getElementById('lightToggle').onclick=()=>{ publish(cfg.TOPICS.LIGHT,'TOGGLE'); addAlert('Гэрэл toggle','ok'); };
+document.getElementById('feedNow').onclick=()=>{ publish(cfg.TOPICS.FEEDER,'FEED_NOW'); addAlert('Feed Now илгээлээ','ok'); };
+
+// ========== Schedule Modal ==========
+document.getElementById('openAddSched').onclick=()=>document.getElementById('schedModal').classList.add('show');
+document.getElementById('closeSchedModal').onclick=()=>document.getElementById('schedModal').classList.remove('show');
+document.getElementById('confirmAddSched').onclick=()=>{
+  const t=document.getElementById('newSchedTime').value;
+  if(!t){ alert('Цаг сонгоно уу'); return; }
+  publish(cfg.TOPICS.SCHEDULE,'ADD:'+t);
+  addAlert('Хуваарь нэмэх хүсэлт илгээлээ: '+t,'ok');
+  document.getElementById('schedModal').classList.remove('show');
+};
+
+// ========== Alerts ==========
+function addAlert(text,type){
+  const el=document.createElement('div');
+  el.style.cssText='padding:7px 10px;border-radius:6px;margin-top:5px;font-size:13px;';
+  if(type==='ok')     el.style.background='rgba(22,163,74,0.12)';
+  else if(type==='warn')   el.style.background='rgba(245,158,11,0.12)';
+  else if(type==='danger') el.style.background='rgba(239,68,68,0.12)';
+  else                el.style.background='rgba(255,255,255,0.02)';
+  el.innerText=new Date().toLocaleTimeString()+' — '+text;
+  document.getElementById('alerts').prepend(el);
+}
+document.getElementById('clearAlerts').onclick=()=>document.getElementById('alerts').innerHTML='';
+
+// ========== Settings Modal ==========
+document.getElementById('openSettings').onclick=()=>{
+  document.getElementById('mqttBroker').value=cfg.MQTT_BROKER;
+  document.getElementById('mqttPort').value=cfg.MQTT_PORT;
+  document.getElementById('mqttClientId').value=cfg.CLIENT_ID;
+  document.getElementById('mqttUser').value=cfg.MQTT_USER;
+  document.getElementById('mqttPass').value=cfg.MQTT_PASS;
+  document.getElementById('settingsModal').classList.add('show');
+};
+document.getElementById('closeSettings').onclick=()=>document.getElementById('settingsModal').classList.remove('show');
+document.getElementById('saveSettings').onclick=()=>{
+  cfg.MQTT_BROKER=document.getElementById('mqttBroker').value||cfg.MQTT_BROKER;
+  cfg.MQTT_PORT=parseInt(document.getElementById('mqttPort').value)||cfg.MQTT_PORT;
+  cfg.CLIENT_ID=document.getElementById('mqttClientId').value||cfg.CLIENT_ID;
+  cfg.MQTT_USER=document.getElementById('mqttUser').value||cfg.MQTT_USER;
+  cfg.MQTT_PASS=document.getElementById('mqttPass').value||cfg.MQTT_PASS;
+  saveCfg(cfg);
+  document.getElementById('settingsModal').classList.remove('show');
+  try{if(client&&connected)client.disconnect();}catch(e){}
+  connectMQTT();
+};
+
+// ========== INIT ==========
+connectMQTT();
+</script>
+</body>
+</html>
