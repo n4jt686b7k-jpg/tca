@@ -176,7 +176,7 @@
 <script>
 // ========== CONFIG ==========
 const DEFAULTS = {
-  MQTT_BROKER: 'wss://10cd6204c71541cf9253bcc891e5f82a.s1.eu.hivemq.cloud/mqtt',
+  MQTT_BROKER: '10cd6204c71541cf9253bcc891e5f82a.s1.eu.hivemq.cloud',
   MQTT_PORT:   8884,
   CLIENT_ID:   'aqua-dash-' + Math.floor(Math.random()*10000),
   MQTT_USER:   'huslen',
@@ -253,7 +253,7 @@ function connectMQTT(){
   try{
     document.getElementById('connState').innerText='Холбогдож байна...';
     document.getElementById('connDot').className='conn-dot';
-    client=new Paho.MQTT.Client(cfg.MQTT_BROKER, Number(cfg.MQTT_PORT), cfg.CLIENT_ID);
+    client=new Paho.MQTT.Client(cfg.MQTT_BROKER, Number(cfg.MQTT_PORT), '/mqtt', cfg.CLIENT_ID);
     client.onConnectionLost=()=>{
       connected=false;
       document.getElementById('connState').innerText='Тасарсан';
